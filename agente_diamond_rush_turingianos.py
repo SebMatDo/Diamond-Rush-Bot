@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from itertools import count
 import cv2
 import numpy as np
@@ -6,230 +7,540 @@ import pyautogui
 
 from skimage.metrics import structural_similarity as ssim
 
-# --- CONFIG ---
-# Diccionario con objetos y su imagen base
-templates_raw = {
-	"door": cv2.imread("Diamond-Rush-Bot\FDoor.png", cv2.IMREAD_COLOR ),
-	"spike": cv2.imread("Diamond-Rush-Bot\FSpikeBGColor.png", cv2.IMREAD_COLOR),
-    "diamondBG": cv2.imread("Diamond-Rush-Bot\FDiamondBGColor.png", cv2.IMREAD_COLOR),
-    "terrain" : cv2.imread("Diamond-Rush-Bot\FTerrain.png", cv2.IMREAD_COLOR),
-    "key" : cv2.imread("Diamond-Rush-Bot\FKeyBGColor.png", cv2.IMREAD_COLOR),
-    "ladder" : cv2.imread("Diamond-Rush-Bot\FLadderBG.png", cv2.IMREAD_COLOR),
-}
+def read_screen_debug(path : str) -> tuple[str, str]:
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    return img
 
-#template_ladder = cv2.imread("Diamond-Rush-Bot\FLadderBG.png", cv2.IMREAD_COLOR)
+def read_screen_realtime() -> tuple[str, str]:
+    img = pyautogui.screenshot()
+    img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    return img
 
-# Imagen principal
-#img = cv2.imread("fullscreenSS.png", cv2.IMREAD_UNCHANGED)
-img = cv2.imread("Diamond-Rush-Bot\SSexample.png", cv2.IMREAD_COLOR)
+def get_game_area(img) -> None | tuple[int, int, int, int]:
+    # ------- HALLAR AREA ENTRE CONTORNOS ------- #
+    # color hexadecimal #10191c
+    # RGB ES 17 25 28
+    target_color = (27, 23, 16)  # Color en formato BGR DEL COLOR -1 PARA RANGO
+    target_color2 = (29, 25, 18)  # Color en formato BGR + 1 para rango
 
-# imagen editada
-img_res = cv2.imread("Diamond-Rush-Bot\SSexample.png", cv2.IMREAD_COLOR)
+    # Crear un rango de color
+    lower_bound = np.array(target_color)  # Límite inferior del color
+    upper_bound = np.array(target_color2)  # Límite superior del color
 
-resXOriginal = 720
-resYOriginal = 1280
-cellHNumber = 16
-cellWNumber = 10
-cellHOriginal = 1280/16
-cellWOriginal = 720/10
-#while True:
+    # Esta mascara filtra segun el rango de color
+    mask = cv2.inRange(img, lower_bound, upper_bound)
+    # Hallar contornos del filtro (mascara)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-#img = pyautogui.screenshot()
-#img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-# imagen hsv
-img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    # Dejar solo los 2 contornos mas grandes
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:2]
 
+    # Hallar el area entre los dos contornos y dibujarla en rojo
+    # Verificar que hay al menos dos contornos
+    if len(contours) >= 2:
+        x1 = cv2.boundingRect(contours[0])
+        x2 = cv2.boundingRect(contours[1])
+        # Reconocer que contorno esta a la izquierda y cual a la derecha
+        if x1 < x2:
+            left_contour = contours[0]
+            right_contour = contours[1]
+        else:
+            left_contour = contours[1]
+            right_contour = contours[0]
 
-# Convertir el color hexadecimal #10191c a BGR
-target_color = (24, 20, 15)  # Color en formato BGR (Blue, Green, Red)
+        x1, y1, w1, h1 = cv2.boundingRect(left_contour)
+        x2, y2, w2, h2 = cv2.boundingRect(right_contour)
+        # Solo el area sin posicionamiento
+        area = (x2 - x1 - w1, h1)
+        
+        if area[0] < 100 or area[1] < 100:
+            print("El área es demasiado pequeña para procesar.")
+            return None
+        else:
+            # Rectángulo delimitador del área entre los dos contornos con posicion inicial y tamaño
+            game_rectangle = (x1 + w1, y1, x2, y2+h2)
+            print("El área es lo suficientemente grande para procesar. ", game_rectangle)
+            # Debug dibujar el rectángulo en la imagen original y mostrarlo
+            #img_debug = img.copy()
+            #cv2.rectangle(img_debug, (w1, y1), (x2, y2+h2), (0, 0, 255), 1)
+            #cv2.imshow("Area del juego", img_debug)
+            #cv2.waitKey(0)
+            return game_rectangle
+    else:
+        print("No se encontraron suficientes contornos para calcular el área.")
+        return None
+    # ---- FIN HALLAR AREA ENTRE CONTORNOS ---- #
 
-target_color2 = (100, 109, 30)  # Color en formato BGR (Blue, Green, Red)
-
-# Crear un rango de color exacto
-lower_bound = np.array(target_color)  # Límite inferior del color
-upper_bound = np.array(target_color2)  # Límite superior del color
-
-# Crear una máscara para el color exacto
-mask = cv2.inRange(img_hsv, lower_bound, upper_bound)
-#cv2.imshow("masyyk", mask)
-result = cv2.bitwise_and(img, img, mask=mask)
-#cv2.imshow("mask", result)
-#cv2.waitKey(0)
-# HAllar contornos del resultado
-contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-# Dejar los 2 contornos mas grandes
-contours = sorted(contours, key=cv2.contourArea, reverse=True)[:2]
-
-
-# Hallar el area entre los dos contornos y dibujarla en rojo
-# Verificar que hay al menos dos contornos
-if len(contours) >= 2:
-    # Obtener los rectángulos delimitadores de los dos contornos más grandes
-    x1, y1, w1, h1 = cv2.boundingRect(contours[0])
-    x2, y2, w2, h2 = cv2.boundingRect(contours[1])
-
-    print(f"Contorno 1: {x1}, {y1}, {w1}, {h1}")
-    print(f"Contorno 2: {x2}, {y2}, {w2}, {h2}")
-
-    firstX = min(x1, x2)
-    secondX = max(x1, x2)
-
-    img_contours = img.copy()
-    cv2.rectangle(img_contours, (firstX+w1,y1), (secondX, y2+h2), (0, 0, 255), 1)
-    area = (secondX - firstX-w1, h1)
-    
-    
-    # Dividir el área en una rejilla en 16 por 10
-    rows = 15
-    cols = 10
+# Esta funcion se encarga de crear la rejilla en la imagen editada y devuelve el tamaño de las celdas
+def create_grid(img_res: np.ndarray, game_rectangle: tuple[int, int, int, int], rows: int, cols: int) -> tuple[float, float]:
+    area = (game_rectangle[2] - game_rectangle[0], game_rectangle[3] - game_rectangle[1])
     cell_width = area[0] / cols
     cell_height = area[1] / rows
-    firstGrid = (firstX + w1, y1)
-
-    print("Área:", area)
-    print("Dimensiones de celda:", cell_width, cell_height)
-    print("Primera celda:", firstGrid)
-
+    first_x, first_y = (game_rectangle[0], game_rectangle[1])
+    print("Area: ", area)
+    print("Tamaño de celda: ", cell_width, cell_height)
     # Dibujar rejilla
-    for i in range(cols + 1):  # Dibujar líneas verticales
-        x = int(firstGrid[0] + i * cell_width)  # Calcular posición exacta
-        cv2.line(
-            img_res,
-            (x, int(firstGrid[1])),
-            (x, int(firstGrid[1] + rows * cell_height)),
-            (255, 0, 0),
-            1,
-        )
+    for i in range(cols + 1):
+        x = round(first_x + i * cell_width)  # Redondear posición x
+        pt1 = (x, round(first_y))  # Redondear posición y
+        pt2 = (x, round(first_y + rows * cell_height))  # Redondear posición y
+        cv2.line(img_res, pt1, pt2, (255, 0, 0), 1)
 
-    for j in range(rows + 1):  # Dibujar líneas horizontales
-        y = int(firstGrid[1] + j * cell_height)  # Calcular posición exacta
-        cv2.line(
-            img_res,
-            (int(firstGrid[0]), y),
-            (int(firstGrid[0] + cols * cell_width), y),
-            (255, 0, 0),
-            1,
-        )
-else:
-    print("No se encontraron suficientes contornos para calcular el área.")
-
-# Mostrar la imagen con el área resaltada
-#cv2.imshow("Area entre contornos", img_contours)
-#cv2.waitKey(1)
-#cv2.destroyAllWindows()
+    for j in range(rows + 1):
+        y = round(first_y + j * cell_height)  # Redondear posición y
+        pt1 = (round(first_x), y)  # Redondear posición x
+        pt2 = (round(first_x + cols * cell_width), y)  # Redondear posición x
+        cv2.line(img_res, pt1, pt2, (255, 0, 0), 1)
 
 
-# Resize match templates to the size of the cells
-for name, template in templates_raw.items():
-    templates_raw[name] = cv2.resize(template, (int(cell_width), int(cell_height)), interpolation=cv2.INTER_NEAREST)
+    return cell_width, cell_height
+
+def resize_templates(templates_raw, cell_width, cell_height):
+    # Usar el tamaño de celda calculado para redimensionar los templates
+    for name, template in templates_raw.items():
+        templates_raw[name] = cv2.resize(template, (int(cell_width), int(cell_height)), interpolation=cv2.INTER_NEAREST)
 
 
 
-
-# Hallar numero de contornos de spikes
-# Convertir el color hexadecimal #160d07 a BGR
-target_color = (7, 13, 22)  # Color en formato BGR (Blue, Green, Red)
-
-# Definir un rango de color para el template spike
-lower_bound = np.array([0, 0, 0])  # Límite inferior del color (ajusta según sea necesario)
-upper_bound = np.array([20, 20, 20])  # Límite superior del color (ajusta según sea necesario)
-
-# Cargar el template spike
-template_spike = templates_raw["spike"]
-
-# Verificar si el template se cargó correctamente
-if template_spike is None:
-    print("El template 'spike' no se cargó correctamente.")
-else:
-    # Convertir el template a espacio de color HSV
-    template_hsv = cv2.cvtColor(template_spike, cv2.COLOR_BGR2HSV)
-
-    # Crear una máscara binaria para el rango de color
-    mask = cv2.inRange(template_spike, lower_bound, upper_bound)
-
-    # Encontrar los contornos en la máscara
-    contoursSpike, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Dibujar los contornos en el template original
-    template_with_contours = template_spike.copy()
-    cv2.drawContours(template_with_contours, contours, -1, (0, 255, 0), 2)  # Color verde para los contornos
-
-    # Mostrar la máscara y el template con contornos
-    # cv2.imshow("Máscara binaria", mask)
-    # cv2.imshow("Contornos en el template spike", template_with_contours)
-    # cv2.waitKey(0)
-# Contornos totales = 9, con tamaños:
-
-
-# Traverse the grid and check for matches with templates
-for i in range(rows):
-    for j in range(cols):
-        # Calcular la posición de la celda actual
-        cell_x = int(firstGrid[0] + j * cell_width)
-        cell_y = int(firstGrid[1] + i * cell_height)
-        cell_w = int(cell_width)
-        cell_h = int(cell_height)
-        cell_roi = img[cell_y:cell_y + cell_h, cell_x:cell_x + cell_w]
-        # Verificar el color promedio del ROI
-        roi_mean_color = cv2.mean(cell_roi)[:3]
-        # Verificar si el ROI coincide con el terreno basado en el color promedio
-        terrain_mean_color = cv2.mean(templates_raw["terrain"])[:3]
-        color_diff = np.linalg.norm(np.array(roi_mean_color) - np.array(terrain_mean_color))
-        color_threshold = 10  # Ajusta este valor según sea necesario
-
-        if color_diff < color_threshold:
-            print(f"terreno encontrado en celda ({i}, {j}) con confianza {max_val:.2f}")
-
-            #  Dibujar un rectángulo alrededor del match en la imagen editada
-            bottom_right = (cell_x + cell_w, cell_y + cell_h)
-            cv2.rectangle(img_res, (cell_x, cell_y), bottom_right, (0, 120, 120), 2)
-            cv2.putText(img_res, "Terreno", (cell_x, cell_y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        
-        
-        # 
-        target_color = (7, 13, 22)  # Color en formato BGR (Blue, Green, Red)
-        # Definir un rango de color para el template spike
-        lower_bound = np.array([0, 0, 0])  # Límite inferior del color (ajusta según sea necesario)
-        upper_bound = np.array([20, 20, 20])  # Límite superior del color (ajusta según sea necesario)
-        # Convertir el template a espacio de color HSV
-        template_hsv = cv2.cvtColor(cell_roi, cv2.COLOR_BGR2HSV)
-
+def find_spike_contours(template: list) -> list:
+    # ----- Hallar ----- #
+    lower_bound = np.array([0, 0, 0])  # Límite inferior del color
+    upper_bound = np.array([20, 20, 20])  # Límite superior del color
+    # Verificar si el template se cargó correctamente
+    if template is None:
+        print("El template 'spike' no se cargó correctamente.")
+    else:
         # Crear una máscara binaria para el rango de color
-        mask = cv2.inRange(cell_roi, lower_bound, upper_bound)
-
-        # Encontrar los contornos en la máscarai
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # Verificar si los contornos de spike son iguales a los de la imagen
-        if len(contours) == len(contoursSpike):
-            match = True
-            if match:
-                print(f"Spike encontrado en celda ({i}, {j})")
-                # Dibujar un rectángulo alrededor del match en la imagen editada
-                bottom_right = (cell_x + cell_w, cell_y + cell_h)
-                cv2.rectangle(img_res, (cell_x, cell_y), bottom_right, (0, 0, 255), 2)
-                cv2.putText(img_res, "Spike", (cell_x, cell_y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-    
-        for name, template in templates_raw.items():
-            # Realizar el match template
-            result = cv2.matchTemplate(cell_roi, template, cv2.TM_CCOEFF_NORMED)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-            
-            # Si el resultado supera el umbral y es el mejor hasta ahora, registrar el match
-            if max_val >= 0.9:
-                print(f"{name.capitalize()} encontrado en celda ({i}, {j}) con confianza {max_val:.2f}")
-                # Dibujar un rectángulo alrededor del match en la imagen editada
-                bottom_right = (cell_x + cell_w, cell_y + cell_h)
-                cv2.rectangle(img_res, (cell_x, cell_y), bottom_right, (0, 255, 0), 2)
-                cv2.putText(img_res, name.capitalize(), (cell_x, cell_y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                continue
-        # cv2.imshow("cell", cell_roi)
+        mask = cv2.inRange(template, lower_bound, upper_bound)
+        # Encontrar los contornos en la máscara
+        contoursSpike, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Mostrar la máscara y el template con contornos
+        # template_with_contours = template.copy()
+        # cv2.drawContours(template_with_contours, contoursSpike, -1, (0, 255, 0), 2)  # Color verde para los contornos
+        # cv2.imshow("Máscara binaria", mask)
+        # cv2.imshow("Contornos en el template spike", template_with_contours)
         # cv2.waitKey(0)
+        return contoursSpike
+    # ----- FIN Hallar numero de contornos de spikes ----- #
+
+def find_diamond_contours(template: list) -> list:
+    # ----- Hallar ----- #
+    lower_bound = np.array([90, 70, 20])  # Límite inferior del color del diamante
+    upper_bound = np.array([235, 235, 235])  # Límite superior del color del diamante
+    # Verificar si el template se cargó correctamente
+    if template is None:
+        print("El template 'diamond' no se cargó correctamente.")
+    else:
+        # Crear una máscara binaria para el rango de color
+        mask = cv2.inRange(template, lower_bound, upper_bound)
+        # Encontrar los contornos en la máscara
+        contoursDiamond, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # result = cv2.bitwise_and(template, template, mask=mask)
+        # # Mostrar la imagen resultante
+        # cv2.imshow("Resultado", result)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+
+        # # Mostrar la máscara y el template con contornos
+        # template_with_contours = template.copy()
+        # cv2.drawContours(template_with_contours, contoursDiamond, -1, (0, 255, 0), 2)  # Color verde para los contornos
+        # cv2.imshow("Máscara binaria", mask)
+        # cv2.imshow("Contornos en el template", template_with_contours)
+        # cv2.waitKey(0)
+        # Devuelve el uinico contorno encontrado
+        return contoursDiamond[0]
+    # ----- FIN Hallar numero de contornos de spikes ----- #
+
+def find_rock_contours(template: list) -> list:
+    # ----- Hallar ----- #
+    # Color principal roca en rgb 236, 151, 91
+    # el color secundario tira hacia al blanco
+    lower_bound = np.array([100, 100, 100])  # Límite inferior del color 
+    upper_bound = np.array([255, 255, 255])  # Límite superior del color 
+    # Verificar si el template se cargó correctamente
+    if template is None:
+        print("El template 'rock' no se cargó correctamente.")
+    else:
+        # Crear una máscara binaria para el rango de color
+        mask = cv2.inRange(template, lower_bound, upper_bound)
+        # Encontrar los contornos en la máscara
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # result = cv2.bitwise_and(template, template, mask=mask)
+        # # Mostrar la imagen resultante
+        # cv2.imshow("Resultado", result)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+        # print("Contornos encontrados: ", len(contours))
+        # # Mostrar la máscara y el template con contornos
+        # template_with_contours = template.copy()
+        # cv2.drawContours(template_with_contours, contours, -1, (0, 255, 0), 2)  # Color verde para los contornos
+        # cv2.imshow("Máscara binaria", mask)
+        # cv2.imshow("Contornos en el template", template_with_contours)
+        # cv2.waitKey(0)
+        # Devuelve el contorno mayor
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
+        return contours[0]
+    # ----- FIN Hallar numero de contornos de spikes ----- #
+
+
+def find_key_contours(template: list) -> list:
+    # ----- Hallar ----- #
+    # Color principal key en rgb 23, 166, 123
+    # Casi notiene red y debe predominar azul y verde
+    lower_bound = np.array([50, 50, 10])  # Límite inferior del color 
+    upper_bound = np.array([200, 200, 40])  # Límite superior del color 
+    # Verificar si el template se cargó correctamente
+    if template is None:
+        print("El template 'key' no se cargó correctamente.")
+    else:
+        # Crear una máscara binaria para el rango de color
+        mask = cv2.inRange(template, lower_bound, upper_bound)
+        # Encontrar los contornos en la máscara
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # result = cv2.bitwise_and(template, template, mask=mask)
+        # # Mostrar la imagen resultante
+        # cv2.imshow("Resultado", result)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+        # print("Contornos encontrados: ", len(contours))
+        # # Mostrar la máscara y el template con contornos
+        # template_with_contours = template.copy()
+        # cv2.drawContours(template_with_contours, contours, -1, (0, 255, 0), 2)  # Color verde para los contornos
+        # cv2.imshow("Máscara binaria", mask)
+        # cv2.imshow("Contornos en el template", template_with_contours)
+        # cv2.waitKey(0)
+        # Devuelve el contorno mayor
+        # contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
+        return contours[0]
+    # ----- FIN Hallar numero de contornos de spikes ----- #
+
+
+def find_door_contours(template: list) -> list:
+    # ----- Hallar ----- #
+    # Color principal key en rgb 17, 121, 87
+    # Casi notiene red y debe predominar azul y verde
+    lower_bound = np.array([50, 80, 5])  # Límite inferior del color 
+    upper_bound = np.array([109, 133, 25])  # Límite superior del color 
+    # Verificar si el template se cargó correctamente
+    if template is None:
+        print("El template 'door' no se cargó correctamente.")
+    else:
+        # Crear una máscara binaria para el rango de color
+        mask = cv2.inRange(template, lower_bound, upper_bound)
+        # Encontrar los contornos en la máscara
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # result = cv2.bitwise_and(template, template, mask=mask)
+        # # Mostrar la imagen resultante
+        # cv2.imshow("Resultado", result)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+        # print("Contornos encontrados: ", len(contours))
+        # # Mostrar la máscara y el template con contornos
+        # template_with_contours = template.copy()
+        # cv2.drawContours(template_with_contours, contours, -1, (0, 255, 0), 2)  # Color verde para los contornos
+        # cv2.imshow("Máscara binaria", mask)
+        # cv2.imshow("Contornos en el template", template_with_contours)
+        # cv2.waitKey(0)
+        # Devuelve el contorno mayor
+
+        return contours[0]
+    # ----- FIN Hallar numero de contornos de spikes ----- #
+
+def detect_spike(cell_roi: np.ndarray, contours_spike: list) -> bool:
+    lower_bound = np.array([0, 0, 0])
+    upper_bound = np.array([20, 20, 20])
+    mask = cv2.inRange(cell_roi, lower_bound, upper_bound)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if len(contours) == len(contours_spike):
+        contours_spike = sorted(contours_spike, key=cv2.contourArea, reverse=True)[:1]
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
+        match_score = cv2.matchShapes(contours_spike[0], contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
+        # Si el match es menor a 0.1, entonces es
+        if match_score < 0.1:
+            return True
+    return False
+
+
+def detect_diamond(cell_roi: np.ndarray, diamond_contour: list) -> bool:
+    # Color principal del diamante: en RGB 58,162, 182
+    # Color secundario mas blanco: 183,222,222
+    # Crear rango para los colores del diamante desde 58,162,182 a 183,222,222
+    lower_bound = np.array([90, 70, 20])  # Límite inferior del color del diamante
+    upper_bound = np.array([235, 235, 235])  # Límite superior del color del diamante
+    mask = cv2.inRange(cell_roi, lower_bound, upper_bound)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Si exactamente un contorno, entonces es un posible diamante
+    if len(contours) == 1:
+        match_score = cv2.matchShapes(diamond_contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
+        # Si el match es menor a 0.1, entonces es un diamante
+        if match_score < 0.1:
+            return True
+    return False
+
+
+
+
+def detect_key(cell_roi: np.ndarray, contour: list) -> bool:
+    # Color principal del diamante: en RGB 58,162, 182
+    # Color secundario mas blanco: 183,222,222
+    # Crear rango para los colores del diamante desde 58,162,182 a 183,222,222
+    lower_bound = np.array([50, 50, 10])  # Límite inferior del color 
+    upper_bound = np.array([200, 200, 40])  # Límite superior del color 
+    mask = cv2.inRange(cell_roi, lower_bound, upper_bound)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Si exactamente un contorno, entonces es un posible diamante
+    if len(contours) == 1:
+        match_score = cv2.matchShapes(contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
+        # Si el match es menor a 0.1, entonces es un diamante
+        if match_score < 0.1:
+            return True
+    return False
+    #return len(contours) == len(contours_spike)
+
+def detect_door(cell_roi: np.ndarray, contour: list) -> bool:
+    # Crear rango para los colores del diamante desde 58,162,182 a 183,222,222
+    lower_bound = np.array([50, 80, 5])  # Límite inferior del color 
+    upper_bound = np.array([109, 133, 25])  # Límite superior del color 
+    mask = cv2.inRange(cell_roi, lower_bound, upper_bound)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Si exactamente un contorno, entonces es un posible diamante
+    if len(contours) == 1:
+        match_score = cv2.matchShapes(contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
+        # Si el match es menor a 0.1, entonces es un diamante
+        if match_score < 0.1:
+            return True
+    return False
+
+def detect_rock(cell_roi: np.ndarray, rock_contour: list) -> bool:
+    # Color principal del diamante: en RGB 58,162, 182
+    # Color secundario mas blanco: 183,222,222
+    # Crear rango para los colores del diamante desde 58,162,182 a 183,222,222
+    lower_bound = np.array([100, 100, 100])  # Límite inferior del color 
+    upper_bound = np.array([255, 255, 255])  # Límite superior del color 
+    mask = cv2.inRange(cell_roi, lower_bound, upper_bound)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Si exactamente 5 contorno, entonces es un posible roca
+    if len(contours) == 5:
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
+        match_score = cv2.matchShapes(rock_contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
+        # Si el match es menor a 0.1, entonces es
+        if match_score < 0.1:
+            return True
+    return False
+    #return len(contours) == len(contours_spike)
+
+
+def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, firstGrid, cell_width, cell_height, rows, cols):
+    # Traverse the grid and check for matches with templates
+    for i in range(rows):
+        for j in range(cols):
+            # Calcular la posición de la celda actual
+            cell_x = int(firstGrid[0] + j * cell_width)
+            cell_y = int(firstGrid[1] + i * cell_height)
+            cell_w = int(cell_width)
+            cell_h = int(cell_height)
+            # Recortar solo la celda actual de la imagen original
+            cell_roi = img[cell_y:cell_y + cell_h, cell_x:cell_x + cell_w]
+
+            match_found_by_template = False
+            for name, template in templates_raw.items():
+                # Realizar el match template
+                result = cv2.matchTemplate(cell_roi, template, cv2.TM_CCOEFF_NORMED)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+                
+                # Si el resultado supera el umbral y es el mejor hasta ahora, registrar el match
+                if max_val >= 0.8:
+                    print(f"{name.capitalize()} encontrado en celda ({i}, {j}) con confianza {max_val:.2f}")
+                    # Dibujar un rectángulo alrededor del match en la imagen editada
+                    bottom_right = (cell_x + cell_w, cell_y + cell_h)
+                    cv2.rectangle(img_res, (cell_x, cell_y), bottom_right, (0, 255, 0), 2)
+                    cv2.putText(img_res, name.capitalize(), (cell_x, cell_y - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)
+                    match_found_by_template = True
+                    break
+            if match_found_by_template: continue
+
+            # --- Verificar si la celda tiene spikes --- #
+            if detect_spike(cell_roi, contours_spike):
+                # Si se detectan spikes, dibujar un rectángulo alrededor de la celda
+                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (0, 0, 255), 1)
+                # Poner el texto "Spike" en la celda
+                cv2.putText(img_res, "Spike", (cell_x, cell_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+                continue
+            
+            if detect_diamond(cell_roi, contours_diamond):
+                # Si se detecta un diamante, dibujar un rectángulo alrededor de la celda
+                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (0, 255, 0), 1)
+                # Poner el texto "Diamond" en la celda
+                cv2.putText(img_res, "Diamond", (cell_x, cell_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)
+                continue
+
+            if detect_rock(cell_roi, contours_rock):
+                # Si se detecta una roca, dibujar un rectángulo alrededor de la celda
+                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (100, 100, 255), 1)
+                # Poner el texto "Rock" en la celda
+                cv2.putText(img_res, "Rock", (cell_x, cell_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (100, 100, 255), 1)
+                continue
+            
+            if detect_key(cell_roi, contours_key):
+                # Si se detecta una llave, dibujar un rectángulo alrededor de la celda
+                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (240, 240, 240), 1)
+                # Poner el texto "Key" en la celda
+                cv2.putText(img_res, "Key", (cell_x, cell_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+                continue
+            
+            if detect_door(cell_roi, contours_door):
+                # Si se detecta una llave, dibujar un rectángulo alrededor de la celda
+                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (20, 240, 240), 1)
+                # Poner el texto "Door" en la celda
+                cv2.putText(img_res, "Door", (cell_x, cell_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (20, 255, 255), 1)
+                continue
+            
+            
+
+            # Verificar si es terreno luego de que el resto falló
+            roi_mean_color = cv2.mean(cell_roi)[:3]
+            # Verificar si el ROI coincide con el terreno basado en el color promedio
+            terrain_mean_color = cv2.mean(templates_raw["terrain"])[:3]
+            color_diff = np.linalg.norm(np.array(roi_mean_color) - np.array(terrain_mean_color))
+            color_threshold = 5  # Ajusta este valor según sea necesario
+
+            if color_diff < color_threshold:
+                print(f"terreno encontrado en celda ({i}, {j}) con confianza {color_diff:.2f}")
+
+                #  Dibujar un rectángulo alrededor del match en la imagen editada
+                bottom_right = (cell_x + cell_w, cell_y + cell_h)
+                cv2.rectangle(img_res, (cell_x, cell_y), bottom_right, (0, 120, 120), 2)
+                cv2.putText(img_res, "Terreno", (cell_x, cell_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)
+            
+            
+            #cv2.imshow("cell", cell_roi)
+            #cv2.waitKey(0)
         
-cv2.imshow("cell", img_res)
-cv2.waitKey(0)
+
+
+def load_templates() -> tuple[dict, dict]:
+    templates_raw = {
+        "door": cv2.imread("Diamond-Rush-Bot/FDoor.png", cv2.IMREAD_COLOR),
+        "diamond": cv2.imread("Diamond-Rush-Bot/FDiamondBGColor.png", cv2.IMREAD_COLOR),
+        "key": cv2.imread("Diamond-Rush-Bot/FKeyBGColor.png", cv2.IMREAD_COLOR),
+        "ladder": cv2.imread("Diamond-Rush-Bot/FLadderBG.png", cv2.IMREAD_COLOR),
+        "ladderpj": cv2.imread("Diamond-Rush-Bot/SSLadderPj.png", cv2.IMREAD_COLOR),
+        "player": cv2.imread("Diamond-Rush-Bot/SSplayer1cell.png", cv2.IMREAD_COLOR),
+        "player2": cv2.imread("Diamond-Rush-Bot/SSplayer1cell2.png", cv2.IMREAD_COLOR),
+        "rock": cv2.imread("Diamond-Rush-Bot/SSrock1.png", cv2.IMREAD_COLOR),
+        "fall": cv2.imread("Diamond-Rush-Bot/SSfall1.png", cv2.IMREAD_COLOR),
+        "terrain": cv2.imread("Diamond-Rush-Bot/FTerrain.png", cv2.IMREAD_COLOR),
+        "spike": cv2.imread("Diamond-Rush-Bot/FSpikeBGColor.png", cv2.IMREAD_COLOR),
+    }
+
+    templates_no_match = {
+        "terrain": cv2.imread("Diamond-Rush-Bot/FTerrain.png", cv2.IMREAD_COLOR),
+        "spike": cv2.imread("Diamond-Rush-Bot/FSpikeBGColor.png", cv2.IMREAD_COLOR),
+        "rock": cv2.imread("Diamond-Rush-Bot/SSrock1.png", cv2.IMREAD_COLOR),
+        "diamond": cv2.imread("Diamond-Rush-Bot/FDiamondBGColor.png", cv2.IMREAD_COLOR),
+        "key": cv2.imread("Diamond-Rush-Bot/FKeyBGColor.png", cv2.IMREAD_COLOR),
         
+        "door": cv2.imread("Diamond-Rush-Bot/FDoor.png", cv2.IMREAD_COLOR),
+    }
+
+    return templates_raw, templates_no_match
+
+def debug_mode():
+    # --- CONFIG ---
+    # Diccionario con objetos y su imagen base
+    templates_raw, templates_no_match = load_templates()
+    # Modo debug
+    img = read_screen_debug("Diamond-Rush-Bot/fullscreenSS2.png")
+    img_res = img.copy()
+    # Obtener área del juego
+    game_rectangle = get_game_area(img)
+    if game_rectangle is None:
+        print("No se pudo encontrar el área del juego.")
+        return
+
+    # Crear rejilla
+    cell_width, cell_height = create_grid(img_res, game_rectangle, rows=15, cols=10)
+
+    # Redimensionar templates
+    resize_templates(templates_raw, cell_width, cell_height)
+
+    # Hallar una sola vez los contornos de los templates
+    contours_spike = find_spike_contours(templates_no_match["spike"])
+    contours_diamond = find_diamond_contours(templates_no_match["diamond"])
+    contours_rock = find_rock_contours(templates_no_match["rock"])
+    contours_key = find_key_contours(templates_no_match["key"])
+    contours_door = find_door_contours(templates_no_match["door"])
+    # ponerle nombre a las celdas
+    tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, game_rectangle, cell_width, cell_height, rows=15, cols=10)
+
+    # Mostrar resultados
+    cv2.imshow("Resultado", img_res)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+def realtime_mode():
+    # --- CONFIG ---
+    while True:
+        # Diccionario con objetos y su imagen base
+        templates_raw, templates_no_match = load_templates()
+        # Modo debug
+        img = read_screen_realtime()
+        img_res = img.copy()
+        # Obtener área del juego
+        game_rectangle = get_game_area(img)
+        if game_rectangle is None:
+            print("No se pudo encontrar el área del juego.")
+            cv2.imshow("Resultado", img_res)
+            if cv2.waitKey(1) == ord('q'):
+                break
+            continue
+
+        # Crear rejilla
+        cell_width, cell_height = create_grid(img_res, game_rectangle, rows=15, cols=10)
+
+        # Redimensionar templates
+        resize_templates(templates_raw, cell_width, cell_height)
+
+        # Hallar una sola vez los contornos de los templates
+        contours_spike = find_spike_contours(templates_no_match["spike"])
+        contours_diamond = find_diamond_contours(templates_no_match["diamond"])
+        contours_rock = find_rock_contours(templates_no_match["rock"])
+        contours_key = find_key_contours(templates_no_match["key"])
+        contours_door = find_door_contours(templates_no_match["door"])
+        # ponerle nombre a las celdas
+        tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, game_rectangle, cell_width, cell_height, rows=15, cols=10)
+
+        # Mostrar resultados
+        cv2.imshow("Resultado", img_res)
+        if cv2.waitKey(1) == ord('q'):
+                break
+
+def main():
+    # Aquí puedes llamar a las funciones o ejecutar el código principal
+    # que desees que se ejecute al iniciar el script.
+    print("Iniciando el programa...")
+    # Puedes encapsular el código existente en funciones y llamarlas aquí si es necesario.
+    
+    
+
+    # VALORES POR DEFECTO
+    resXOriginal = 720
+    resYOriginal = 1280
+    cellHNumber = 16
+    cellWNumber = 10
+    cellHOriginal = 1280/15
+    cellWOriginal = 720/10
+    
+    realtime_mode()
+    # debug_mode()
+
+
+if __name__ == "__main__":
+    main()
