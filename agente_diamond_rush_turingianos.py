@@ -1,5 +1,6 @@
 from contextlib import nullcontext
 from itertools import count
+import re
 import cv2
 import numpy as np
 from collections import deque
@@ -20,8 +21,8 @@ def get_game_area(img) -> None | tuple[int, int, int, int]:
     # ------- HALLAR AREA ENTRE CONTORNOS ------- #
     # color hexadecimal #10191c
     # RGB ES 17 25 28
-    target_color = (27, 23, 16)  # Color en formato BGR DEL COLOR -1 PARA RANGO
-    target_color2 = (29, 25, 18)  # Color en formato BGR + 1 para rango
+    target_color = (24, 21, 13)  # Color en formato BGR DEL COLOR -1 PARA RANGO
+    target_color2 = (32, 27, 22)  # Color en formato BGR + 1 para rango
 
     # Crear un rango de color
     lower_bound = np.array(target_color)  # Límite inferior del color
@@ -183,6 +184,27 @@ def find_rock_contours(template: list) -> list:
     # ----- FIN Hallar numero de contornos de spikes ----- #
 
 
+
+def find_fall_contours(template: list) -> list:
+    # template to gray scale
+    template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    # umbral para binarizar la imagen
+    _, template_gray = cv2.threshold(template_gray, 40, 50, cv2.THRESH_BINARY_INV)
+    # encontrar contornos
+    contours, _ = cv2.findContours(template_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
+    return contours[0]
+    # cv2.imshow("Resultado", template_gray)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
+    # # dibujar contornos
+    # cv2.drawContours(template, contours, -1, (0, 255, 0), 2)  # Color verde para los contornos
+    # # # Mostrar la imagen resultante
+    # cv2.imshow("Resultado", template)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
+
+
 def find_key_contours(template: list) -> list:
     # ----- Hallar ----- #
     # Color principal key en rgb 23, 166, 123
@@ -256,7 +278,7 @@ def detect_spike(cell_roi: np.ndarray, contours_spike: list) -> bool:
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
         match_score = cv2.matchShapes(contours_spike[0], contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
         # Si el match es menor a 0.1, entonces es
-        if match_score < 0.1:
+        if match_score < 5:
             return True
     return False
 
@@ -273,10 +295,28 @@ def detect_diamond(cell_roi: np.ndarray, diamond_contour: list) -> bool:
     if len(contours) == 1:
         match_score = cv2.matchShapes(diamond_contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
         # Si el match es menor a 0.1, entonces es un diamante
-        if match_score < 0.1:
+        if match_score < 0.5:
             return True
     return False
 
+
+def detect_fall(cell_roi: np.ndarray, contour: list) -> bool:
+    # template to gray scale
+    cell_roi_gray = cv2.cvtColor(cell_roi, cv2.COLOR_BGR2GRAY)
+    # umbral para binarizar la imagen
+    _, cell_roi_gray = cv2.threshold(cell_roi_gray, 40, 50, cv2.THRESH_BINARY_INV)
+    # encontrar contornos
+    contours, _ = cv2.findContours(cell_roi_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+
+    if len(contours) > 1:
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
+            
+        match_score = cv2.matchShapes(contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
+        # Si el match es menor a 0.1, entonces es un fall
+        if match_score < 0.08:
+            return True
+    return False
 
 
 
@@ -292,7 +332,7 @@ def detect_key(cell_roi: np.ndarray, contour: list) -> bool:
     if len(contours) == 1:
         match_score = cv2.matchShapes(contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
         # Si el match es menor a 0.1, entonces es un diamante
-        if match_score < 0.1:
+        if match_score < 0.5:
             return True
     return False
     #return len(contours) == len(contours_spike)
@@ -307,7 +347,7 @@ def detect_door(cell_roi: np.ndarray, contour: list) -> bool:
     if len(contours) == 1:
         match_score = cv2.matchShapes(contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
         # Si el match es menor a 0.1, entonces es un diamante
-        if match_score < 0.1:
+        if match_score < 0.5:
             return True
     return False
 
@@ -324,13 +364,13 @@ def detect_rock(cell_roi: np.ndarray, rock_contour: list) -> bool:
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
         match_score = cv2.matchShapes(rock_contour, contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
         # Si el match es menor a 0.1, entonces es
-        if match_score < 0.1:
+        if match_score < 0.5:
             return True
     return False
     #return len(contours) == len(contours_spike)
 
 
-def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, firstGrid, cell_width, cell_height, rows, cols):
+def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, contours_fall, firstGrid, cell_width, cell_height, rows, cols):
     # Traverse the grid and check for matches with templates
     for i in range(rows):
         for j in range(cols):
@@ -349,7 +389,7 @@ def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, con
                 min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
                 
                 # Si el resultado supera el umbral y es el mejor hasta ahora, registrar el match
-                if max_val >= 0.8:
+                if max_val >= 0.9:
                     print(f"{name.capitalize()} encontrado en celda ({i}, {j}) con confianza {max_val:.2f}")
                     # Dibujar un rectángulo alrededor del match en la imagen editada
                     bottom_right = (cell_x + cell_w, cell_y + cell_h)
@@ -369,37 +409,45 @@ def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, con
                             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
                 continue
             
-            if detect_diamond(cell_roi, contours_diamond):
-                # Si se detecta un diamante, dibujar un rectángulo alrededor de la celda
-                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (0, 255, 0), 1)
-                # Poner el texto "Diamond" en la celda
-                cv2.putText(img_res, "Diamond", (cell_x, cell_y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)
+            if detect_fall(cell_roi, contours_fall):
+                # Si se detecta un fall, dibujar un rectángulo alrededor de la celda
+                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (60, 60, 255), 1)
+                # Poner el texto "Fall" en la celda
+                cv2.putText(img_res, "Fall", (cell_x, cell_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (60, 60, 255), 1)
                 continue
 
-            if detect_rock(cell_roi, contours_rock):
-                # Si se detecta una roca, dibujar un rectángulo alrededor de la celda
-                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (100, 100, 255), 1)
-                # Poner el texto "Rock" en la celda
-                cv2.putText(img_res, "Rock", (cell_x, cell_y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (100, 100, 255), 1)
-                continue
+            # if detect_diamond(cell_roi, contours_diamond):
+            #     # Si se detecta un diamante, dibujar un rectángulo alrededor de la celda
+            #     cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (0, 255, 0), 1)
+            #     # Poner el texto "Diamond" en la celda
+            #     cv2.putText(img_res, "Diamond", (cell_x, cell_y - 10),
+            #                 cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)
+            #     continue
+
+            # if detect_rock(cell_roi, contours_rock):
+            #     # Si se detecta una roca, dibujar un rectángulo alrededor de la celda
+            #     cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (100, 100, 255), 1)
+            #     # Poner el texto "Rock" en la celda
+            #     cv2.putText(img_res, "Rock", (cell_x, cell_y - 10),
+            #                 cv2.FONT_HERSHEY_SIMPLEX, 0.35, (100, 100, 255), 1)
+            #     continue
             
-            if detect_key(cell_roi, contours_key):
-                # Si se detecta una llave, dibujar un rectángulo alrededor de la celda
-                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (240, 240, 240), 1)
-                # Poner el texto "Key" en la celda
-                cv2.putText(img_res, "Key", (cell_x, cell_y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
-                continue
+            # if detect_key(cell_roi, contours_key):
+            #     # Si se detecta una llave, dibujar un rectángulo alrededor de la celda
+            #     cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (240, 240, 240), 1)
+            #     # Poner el texto "Key" en la celda
+            #     cv2.putText(img_res, "Key", (cell_x, cell_y - 10),
+            #                 cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+            #     continue
             
-            if detect_door(cell_roi, contours_door):
-                # Si se detecta una llave, dibujar un rectángulo alrededor de la celda
-                cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (20, 240, 240), 1)
-                # Poner el texto "Door" en la celda
-                cv2.putText(img_res, "Door", (cell_x, cell_y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (20, 255, 255), 1)
-                continue
+            # if detect_door(cell_roi, contours_door):
+            #     # Si se detecta una llave, dibujar un rectángulo alrededor de la celda
+            #     cv2.rectangle(img_res, (cell_x, cell_y), (cell_x + cell_w, cell_y + cell_h), (20, 240, 240), 1)
+            #     # Poner el texto "Door" en la celda
+            #     cv2.putText(img_res, "Door", (cell_x, cell_y - 10),
+            #                 cv2.FONT_HERSHEY_SIMPLEX, 0.35, (20, 255, 255), 1)
+            #     continue
             
             
 
@@ -408,7 +456,7 @@ def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, con
             # Verificar si el ROI coincide con el terreno basado en el color promedio
             terrain_mean_color = cv2.mean(templates_raw["terrain"])[:3]
             color_diff = np.linalg.norm(np.array(roi_mean_color) - np.array(terrain_mean_color))
-            color_threshold = 5  # Ajusta este valor según sea necesario
+            color_threshold = 10  # Ajusta este valor según sea necesario
 
             if color_diff < color_threshold:
                 print(f"terreno encontrado en celda ({i}, {j}) con confianza {color_diff:.2f}")
@@ -435,9 +483,13 @@ def load_templates() -> tuple[dict, dict]:
         "player": cv2.imread("Diamond-Rush-Bot/SSplayer1cell.png", cv2.IMREAD_COLOR),
         "player2": cv2.imread("Diamond-Rush-Bot/SSplayer1cell2.png", cv2.IMREAD_COLOR),
         "rock": cv2.imread("Diamond-Rush-Bot/SSrock1.png", cv2.IMREAD_COLOR),
-        "fall": cv2.imread("Diamond-Rush-Bot/SSfall1.png", cv2.IMREAD_COLOR),
+        "fall1": cv2.imread("Diamond-Rush-Bot/SSfall1.png", cv2.IMREAD_COLOR),
+        "fall": cv2.imread("Diamond-Rush-Bot/fall.png", cv2.IMREAD_COLOR),
+        
         "terrain": cv2.imread("Diamond-Rush-Bot/FTerrain.png", cv2.IMREAD_COLOR),
         "spike": cv2.imread("Diamond-Rush-Bot/FSpikeBGColor.png", cv2.IMREAD_COLOR),
+        "metal-door": cv2.imread("Diamond-Rush-Bot/metal-door.png", cv2.IMREAD_COLOR),
+        "push_button": cv2.imread("Diamond-Rush-Bot/push_button.png", cv2.IMREAD_COLOR),
     }
 
     templates_no_match = {
@@ -447,6 +499,7 @@ def load_templates() -> tuple[dict, dict]:
         "diamond": cv2.imread("Diamond-Rush-Bot/FDiamondBGColor.png", cv2.IMREAD_COLOR),
         "key": cv2.imread("Diamond-Rush-Bot/FKeyBGColor.png", cv2.IMREAD_COLOR),
         
+        "fall": cv2.imread("Diamond-Rush-Bot/fall.png", cv2.IMREAD_COLOR), 
         "door": cv2.imread("Diamond-Rush-Bot/FDoor.png", cv2.IMREAD_COLOR),
     }
 
@@ -457,7 +510,7 @@ def debug_mode():
     # Diccionario con objetos y su imagen base
     templates_raw, templates_no_match = load_templates()
     # Modo debug
-    img = read_screen_debug("Diamond-Rush-Bot/fullscreenSS2.png")
+    img = read_screen_debug("Diamond-Rush-Bot/SSexample.png")
     img_res = img.copy()
     # Obtener área del juego
     game_rectangle = get_game_area(img)
@@ -477,8 +530,9 @@ def debug_mode():
     contours_rock = find_rock_contours(templates_no_match["rock"])
     contours_key = find_key_contours(templates_no_match["key"])
     contours_door = find_door_contours(templates_no_match["door"])
+    contours_fall = find_fall_contours(templates_no_match["fall"])
     # ponerle nombre a las celdas
-    tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, game_rectangle, cell_width, cell_height, rows=15, cols=10)
+    tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, contours_fall, game_rectangle, cell_width, cell_height, rows=15, cols=10)
 
     # Mostrar resultados
     cv2.imshow("Resultado", img_res)
@@ -514,8 +568,9 @@ def realtime_mode():
         contours_rock = find_rock_contours(templates_no_match["rock"])
         contours_key = find_key_contours(templates_no_match["key"])
         contours_door = find_door_contours(templates_no_match["door"])
+        contours_fall = find_fall_contours(templates_no_match["fall"])
         # ponerle nombre a las celdas
-        tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, game_rectangle, cell_width, cell_height, rows=15, cols=10)
+        tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, contours_rock, contours_key, contours_door, contours_fall, game_rectangle, cell_width, cell_height, rows=15, cols=10)
 
         # Mostrar resultados
         cv2.imshow("Resultado", img_res)
