@@ -276,9 +276,11 @@ def detect_spike(cell_roi: np.ndarray, contours_spike: list) -> bool:
     if len(contours) == len(contours_spike):
         contours_spike = sorted(contours_spike, key=cv2.contourArea, reverse=True)[:1]
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:1]
-        match_score = cv2.matchShapes(contours_spike[0], contours[0], cv2.CONTOURS_MATCH_I1, 0.0)
-        # Si el match es menor a 0.1, entonces es
-        if match_score < 5:
+        sum_score = 0
+        for i in range(len(contours_spike)):
+            match_score = cv2.matchShapes(contours_spike[i], contours[i], cv2.CONTOURS_MATCH_I1, 0.0)
+            sum_score += match_score
+        if sum_score < 3:
             return True
     return False
 
@@ -389,7 +391,8 @@ def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, con
                 min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
                 
                 # Si el resultado supera el umbral y es el mejor hasta ahora, registrar el match
-                if max_val >= 0.9:
+                # TODO AJUSTAR MEJOR EL UMBRAL Y A VECES AJUSTAR EL DE LA ROCA Y EL BOTON
+                if max_val >= 0.75:
                     print(f"{name.capitalize()} encontrado en celda ({i}, {j}) con confianza {max_val:.2f}")
                     # Dibujar un rectángulo alrededor del match en la imagen editada
                     bottom_right = (cell_x + cell_w, cell_y + cell_h)
@@ -456,7 +459,7 @@ def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, con
             # Verificar si el ROI coincide con el terreno basado en el color promedio
             terrain_mean_color = cv2.mean(templates_raw["terrain"])[:3]
             color_diff = np.linalg.norm(np.array(roi_mean_color) - np.array(terrain_mean_color))
-            color_threshold = 10  # Ajusta este valor según sea necesario
+            color_threshold = 15  # Ajusta este valor según sea necesario
 
             if color_diff < color_threshold:
                 print(f"terreno encontrado en celda ({i}, {j}) con confianza {color_diff:.2f}")
@@ -474,22 +477,35 @@ def tag_cells(img_res, img, templates_raw, contours_spike, contours_diamond, con
 
 
 def load_templates() -> tuple[dict, dict]:
+    # ASSETS en tamaño full screen 1920x1080
+    # TODO hacer assets en 1366x768 y probar si esas estan mejor para pantallas mas chicas... probar
     templates_raw = {
         "door": cv2.imread("Diamond-Rush-Bot/FDoor.png", cv2.IMREAD_COLOR),
         "diamond": cv2.imread("Diamond-Rush-Bot/FDiamondBGColor.png", cv2.IMREAD_COLOR),
         "key": cv2.imread("Diamond-Rush-Bot/FKeyBGColor.png", cv2.IMREAD_COLOR),
         "ladder": cv2.imread("Diamond-Rush-Bot/FLadderBG.png", cv2.IMREAD_COLOR),
         "ladderpj": cv2.imread("Diamond-Rush-Bot/SSLadderPj.png", cv2.IMREAD_COLOR),
+        "ladderfs": cv2.imread("Diamond-Rush-Bot/ladder-fs.png", cv2.IMREAD_COLOR),
+        "ladderfsopen": cv2.imread("Diamond-Rush-Bot/ladder-fs-open.png", cv2.IMREAD_COLOR),
+        "ladderfsopenpj": cv2.imread("Diamond-Rush-Bot/ladder-fs-open-pj.png", cv2.IMREAD_COLOR),
+        "laddernowalls": cv2.imread("Diamond-Rush-Bot/ladder-no-walls.png", cv2.IMREAD_COLOR),
+        "laddernowalls-open": cv2.imread("Diamond-Rush-Bot/ladder-no-walls-open.png", cv2.IMREAD_COLOR),
         "player": cv2.imread("Diamond-Rush-Bot/SSplayer1cell.png", cv2.IMREAD_COLOR),
         "player2": cv2.imread("Diamond-Rush-Bot/SSplayer1cell2.png", cv2.IMREAD_COLOR),
+        "player3": cv2.imread("Diamond-Rush-Bot/player2.png", cv2.IMREAD_COLOR),
+        "player-with-key": cv2.imread("Diamond-Rush-Bot/playerWithKey.png", cv2.IMREAD_COLOR),
+        "player-with-key2": cv2.imread("Diamond-Rush-Bot/playerWithKey2.png", cv2.IMREAD_COLOR),
         "rock": cv2.imread("Diamond-Rush-Bot/SSrock1.png", cv2.IMREAD_COLOR),
         "fall1": cv2.imread("Diamond-Rush-Bot/SSfall1.png", cv2.IMREAD_COLOR),
         "fall": cv2.imread("Diamond-Rush-Bot/fall.png", cv2.IMREAD_COLOR),
-        
+        "rock-in-fall": cv2.imread("Diamond-Rush-Bot/rock-in-fall.png", cv2.IMREAD_COLOR),
         "terrain": cv2.imread("Diamond-Rush-Bot/FTerrain.png", cv2.IMREAD_COLOR),
         "spike": cv2.imread("Diamond-Rush-Bot/FSpikeBGColor.png", cv2.IMREAD_COLOR),
         "metal-door": cv2.imread("Diamond-Rush-Bot/metal-door.png", cv2.IMREAD_COLOR),
         "push_button": cv2.imread("Diamond-Rush-Bot/push_button.png", cv2.IMREAD_COLOR),
+        "spike-up1": cv2.imread("Diamond-Rush-Bot/spikesArriba1.png", cv2.IMREAD_COLOR),
+        "spike-up2": cv2.imread("Diamond-Rush-Bot/spikesArriba2.png", cv2.IMREAD_COLOR),
+        
     }
 
     templates_no_match = {
@@ -498,7 +514,6 @@ def load_templates() -> tuple[dict, dict]:
         "rock": cv2.imread("Diamond-Rush-Bot/SSrock1.png", cv2.IMREAD_COLOR),
         "diamond": cv2.imread("Diamond-Rush-Bot/FDiamondBGColor.png", cv2.IMREAD_COLOR),
         "key": cv2.imread("Diamond-Rush-Bot/FKeyBGColor.png", cv2.IMREAD_COLOR),
-        
         "fall": cv2.imread("Diamond-Rush-Bot/fall.png", cv2.IMREAD_COLOR), 
         "door": cv2.imread("Diamond-Rush-Bot/FDoor.png", cv2.IMREAD_COLOR),
     }
@@ -510,7 +525,7 @@ def debug_mode():
     # Diccionario con objetos y su imagen base
     templates_raw, templates_no_match = load_templates()
     # Modo debug
-    img = read_screen_debug("Diamond-Rush-Bot/SSexample.png")
+    img = read_screen_debug("Diamond-Rush-Bot/SC7.png")
     img_res = img.copy()
     # Obtener área del juego
     game_rectangle = get_game_area(img)
@@ -577,24 +592,9 @@ def realtime_mode():
         if cv2.waitKey(1) == ord('q'):
                 break
 
-def main():
-    # Aquí puedes llamar a las funciones o ejecutar el código principal
-    # que desees que se ejecute al iniciar el script.
-    print("Iniciando el programa...")
-    # Puedes encapsular el código existente en funciones y llamarlas aquí si es necesario.
-    
-    
-
-    # VALORES POR DEFECTO
-    resXOriginal = 720
-    resYOriginal = 1280
-    cellHNumber = 16
-    cellWNumber = 10
-    cellHOriginal = 1280/15
-    cellWOriginal = 720/10
-    
-    realtime_mode()
-    # debug_mode()
+def main():   
+    # realtime_mode()
+    debug_mode()
 
 
 if __name__ == "__main__":
